@@ -12,7 +12,7 @@ import random
 from common import (
     get_service_key, get_season_by_date, fetch_realtime_kma_temp, fetch_past_kma_temp
 )
-ㅂ
+
 SEASON_KEY = "여름"
 st.set_page_config(page_title="여름 - 폭염·열섬", page_icon="☀️", layout="wide")
 st.header("☀️ 여름철 도시 열섬 현상(UHI) 및 실시간 폭염 분석 대시보드")
