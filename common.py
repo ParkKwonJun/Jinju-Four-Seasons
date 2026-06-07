@@ -5,20 +5,51 @@ import os
 import math          
 import numpy as np   
 from datetime import datetime, date, timedelta
-jinju_station_aliases = ["상봉동", "대안동", "상대동", "정촌면"]
+# ── 진주시 전체 행정동 정보 ──────────────────────────────────────
+jinju_station_aliases = ["상봉동", "대안동", "상대동", "정촌면", "계동", "삼현동", "명석면", "금곡면", "문산면", "사봉면", "집현면", "칠곡면", "이반성면", "목면", "봉곡면"]
 
 jinju_station_search_keywords = {
     "상봉동": ["상봉동", "북장대로64번길", "중앙119안전센터"],
     "대안동": ["대안동", "IBK기업은행", "진주대로 1052"],
     "상대동": ["상대동", "동진로 279", "한국전력공사"],
-    "정촌면": ["정촌면", "예하리", "예하초등학교", "예하초"]
+    "정촌면": ["정촌면", "예하리", "예하초등학교"],
+    "계동": ["계동", "계동"],
+    "삼현동": ["삼현동", "신도시"],
+    "명석면": ["명석면"],
+    "금곡면": ["금곡면"],
+    "문산면": ["문산면"],
+    "사봉면": ["사봉면"],
+    "집현면": ["집현면"],
+    "칠곡면": ["칠곡면"],
+    "이반성면": ["이반성면"],
+    "목면": ["목면"],
+    "봉곡면": ["봉곡면"]
 }
 
+# ── 진주시 행정동 위치 정보 (위도, 경도) ─────────────────────────
 station_locations = {
-    "상봉동": {"lat": 35.1880, "lon": 128.0950, "address": "진주시 북장대로64번길 14"},
-    "대안동": {"lat": 35.1775, "lon": 128.0980, "address": "진주시 진주대로 1052"},
-    "상대동": {"lat": 35.1810, "lon": 128.0935, "address": "진주시 동진로 279"},
-    "정촌면": {"lat": 35.2475, "lon": 128.1620, "address": "진주시 정촌면 예하리 1340"}
+    # 동부지역 (원도심 포함)
+    "대안동": {"lat": 35.1775, "lon": 128.0980, "address": "진주시 진주대로 1052", "zone": "원도심"},
+    "계동": {"lat": 35.1720, "lon": 128.1050, "address": "진주시 계동", "zone": "원도심"},
+    "상봉동": {"lat": 35.1880, "lon": 128.0950, "address": "진주시 북장대로64번길 14", "zone": "동부"},
+    "상대동": {"lat": 35.1810, "lon": 128.0935, "address": "진주시 동진로 279", "zone": "동부"},
+    # 서부지역 (신도시)
+    "삼현동": {"lat": 35.2000, "lon": 128.1100, "address": "진주시 삼현동", "zone": "신도시"},
+    # 북부지역
+    "정촌면": {"lat": 35.2475, "lon": 128.1620, "address": "진주시 정촌면 예하리 1340", "zone": "북부"},
+    "명석면": {"lat": 35.2350, "lon": 128.1450, "address": "진주시 명석면", "zone": "북부"},
+    # 남부지역
+    "금곡면": {"lat": 35.1300, "lon": 128.1200, "address": "진주시 금곡면", "zone": "남부"},
+    "문산면": {"lat": 35.0950, "lon": 128.1050, "address": "진주시 문산면", "zone": "남부"},
+    # 서부지역
+    "사봉면": {"lat": 35.1850, "lon": 127.9850, "address": "진주시 사봉면", "zone": "서부"},
+    "집현면": {"lat": 35.2100, "lon": 127.9700, "address": "진주시 집현면", "zone": "서부"},
+    # 북서부지역
+    "칠곡면": {"lat": 35.2650, "lon": 128.0850, "address": "진주시 칠곡면", "zone": "북서"},
+    "이반성면": {"lat": 35.2550, "lon": 128.0450, "address": "진주시 이반성면", "zone": "북서"},
+    # 남서부지역
+    "목면": {"lat": 35.0800, "lon": 127.9950, "address": "진주시 목면", "zone": "남서"},
+    "봉곡면": {"lat": 35.0600, "lon": 128.1100, "address": "진주시 봉곡면", "zone": "남동"}
 }
 
 GRADE_MAP = {"1": "좋음", "2": "보통", "3": "나쁨", "4": "매우 나쁨"}
@@ -207,37 +238,32 @@ def fetch_kma_temperature(service_key: str, nx: int = 91, ny: int = 81):
 
 # ── [기상청 API 연동] 실시간 기온 및 체감온도 계산 함수 ──────────────────────
 
-@st.cache_data(ttl=1800)  # 30분 동안 캐싱
+@st.cache_data(ttl=600)  # 10분 동안 캐싱
 def fetch_realtime_kma_temp(service_key: str):
     """
-    기상청 초단기실황 API를 통해 진주시(격자 nx=91, ny=81)의 
-    실시간 기온(T1H) 및 습도(REH)를 가져와 기상청 공식 체감온도를 계산합니다.
+    기상청 ASOS API를 통해 진주시(stnIds=192)의 
+    실시간 기온(ta) 및 습도(hm)를 가져와 체감온도를 계산합니다.
     """
     if not service_key:
         return None
-        
-    url = "http://apis.data.go.kr/1360000/VilageFrcstSvc/getUltraSrtNcst"
     
-    # 기상청 API는 호출 시점의 날짜와 정시(Hour) 기준 조회가 필요합니다.
+    url = "http://apis.data.go.kr/1360000/AsosHourlyInfoService/getWthrDataList"
+    
     now = datetime.now()
-    # 매시 40분 전에는 전 시간 데이터를 조회해야 안전합니다.
-    if now.minute < 40:
-        base_time_dt = now - timedelta(hours=1)
-    else:
-        base_time_dt = now
-        
-    base_date = base_time_dt.strftime("%Y%m%d")
-    base_time = base_time_dt.strftime("%H00")
+    base_date = now.strftime("%Y%m%d")
     
     params = {
         "serviceKey": service_key,
         "pageNo": "1",
-        "numOfRows": "10",
+        "numOfRows": "100",  # 전체 데이터 받기
         "dataType": "JSON",
-        "base_date": base_date,
-        "base_time": base_time,
-        "nx": "91",  # 진주시 중심부 격자 X
-        "ny": "81"   # 진주시 중심부 격자 Y
+        "dataCd": "ASOS",
+        "dateCd": "HR",
+        "startDt": base_date,
+        "startHh": "00",
+        "endDt": base_date,
+        "endHh": "23",
+        "stnIds": "192"  # 진주 ASOS 관측소
     }
     
     try:
@@ -246,25 +272,33 @@ def fetch_realtime_kma_temp(service_key: str):
         res_json = r.json()
         
         items = res_json["response"]["body"]["items"]["item"]
+        if isinstance(items, dict):
+            items = [items]
         
-        kma_data = {}
-        for item in items:
-            if item["category"] == "T1H": # 기온
-                kma_data["temp"] = float(item["obsrValue"])
-            elif item["category"] == "REH": # 습도
-                kma_data["humidity"] = float(item["obsrValue"])
-                
-        # 💡 기상청 여름철 대만 체감온도(Apparent Temperature) 약식 공식 계산
-        # Ta (기온), RH (상대습도)
-        Ta = kma_data.get("temp", 30.0)
-        RH = kma_data.get("humidity", 50.0)
-        Tw = Ta * np.arctan(0.151977 * (RH + 8.313659)**0.5) + np.arctan(Ta + RH) - np.arctan(RH - 1.676331) + 0.00391838 * (RH)**1.5 * np.arctan(0.023101 * RH) - 4.686035
-        feels_like = -9.369 + 1.045*Ta + 0.036*Tw - 0.0004*Ta**2 + 0.0003*Ta*Tw
-        
-        kma_data["feels_like"] = round(feels_like, 1)
-        return kma_data
+        # 가장 최근 데이터 선택
+        if items:
+            item = items[-1]  # 마지막(가장 최신) 데이터
+            ta = float(item.get("ta", 30.0))
+            hm = float(item.get("hm", 50.0))
+            
+            # 여름철 체감온도 계산 (Steadman 공식 기반)
+            def calculate_feels_like(ta, hm):
+                # 기온이 25℃ 이상일 때의 체감온도
+                if ta >= 25:
+                    # 습도 보정: 습도가 높을수록 체감온도 상승
+                    humidity_effect = (hm / 100.0 - 0.14) * (ta - 14.5) * 0.5555
+                    feels = ta + humidity_effect
+                else:
+                    feels = ta
+                return round(feels, 1)
+            
+            return {
+                "temp": round(ta, 1),
+                "humidity": round(hm, 1),
+                "feels_like": calculate_feels_like(ta, hm)
+            }
+        return None
     except Exception as e:
-        # API 오류 발생 시 알림을 위해 None 반환 (또는 에러 로그)
         return None
 
 @st.cache_data(ttl=86400)
@@ -302,18 +336,16 @@ def fetch_past_kma_temp(service_key: str, target_date: date, target_hour: str):
         
         items = res_json["response"]["body"]["items"]["item"]
         
-        # 💡 대한민국 기상청 공식 여름철 체감온도 계산 함수 (라디안 -> 디그리 반영)
+        # 💡 기상청 공식 여름철 체감온도 계산 함수
         def calculate_feels_like(ta, rh):
-            # math.degrees()를 적용하여 기상청 수식 표준 단위(°)로 맞춤 변환
-            tw = (ta * math.degrees(math.atan(0.151977 * (rh + 8.313659)**0.5)) 
-                  + math.degrees(math.atan(ta + rh)) 
-                  - math.degrees(math.atan(rh - 1.676331)) 
-                  + 0.00391838 * (rh**1.5) * math.degrees(math.atan(0.023101 * rh)) 
-                  - 4.686035)
-            
-            # 여름철 체감온도 산출 공식
-            st_val = -9.369 + 1.045 * ta + 0.036 * tw - 0.0004 * (ta**2) + 0.0003 * ta * tw
-            return round(st_val, 1)
+            # 기온이 25℃ 이상일 때의 체감온도
+            if ta >= 25:
+                # 습도 보정: 습도가 높을수록 체감온도 상승
+                humidity_effect = (rh / 100.0 - 0.14) * (ta - 14.5) * 0.5555
+                feels = ta + humidity_effect
+            else:
+                feels = ta
+            return round(feels, 1)
 
         # 안전하게 정렬 후 시간별 트렌드 데이터 리스트 생성
         # 기상청 데이터의 시간 포맷 "YYYY-MM-DD HH:00"에서 HH 추출하여 정렬

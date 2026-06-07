@@ -8,75 +8,71 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from datetime import datetime, date, timedelta
-import random
-from common import (
-    get_service_key, get_season_by_date, fetch_realtime_kma_temp, fetch_past_kma_temp
-)
+from common import get_service_key, fetch_realtime_kma_temp, fetch_past_kma_temp, station_locations
 
-SEASON_KEY = "여름"
 st.set_page_config(page_title="여름 - 폭염·열섬", page_icon="☀️", layout="wide")
 st.header("☀️ 여름철 도시 열섬 현상(UHI) 및 실시간 폭염 분석 대시보드")
 
 # ── 사이드바: 데이터 모드 선택 ────────────────────────────────────
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 데이터 모드 선택")
-service_key = get_service_key() # 기존 실시간용 에어코리아 키
-default_idx = 0 if service_key else 1
 data_mode = st.sidebar.radio(
     "보고 싶은 데이터를 선택하세요:",
-    ["📡 실시간 데이터", "📁 과거 기준 데이터"],
-    index=default_idx, key="mode_여름"
+    ["📡 실시간 데이터", "📁 과거 데이터"],
+    index=0, key="mode_여름"
 )
 is_realtime = (data_mode == "📡 실시간 데이터")
 
+# ── 초기값 설정 ─────────────────────────────────────────────────────
+real_temp, real_humidity, real_feels = 30.0, 55.0, 32.0
+feels_trend = None
+api_active = False
 picked_date_str = ""
-kma_api_active = False
-past_api_active = False
-real_temp, real_humidity, real_feels = 33.0, 60.0, 34.2
-feels_trend = []
 
 # ── 📡 실시간 데이터 모드 ─────────────────────────────────────────
 if is_realtime:
-    if service_key:
-        with st.spinner("기상청에서 실시간 진주시 날씨를 조회하는 중..."):
-            kma_res = fetch_realtime_kma_temp(service_key)
+    kma_key = get_service_key()
+    if kma_key:
+        with st.spinner("🌡️ 기상청 실시간 기온 데이터 조회 중..."):
+            kma_res = fetch_realtime_kma_temp(kma_key)
             if kma_res:
                 real_temp = kma_res["temp"]
                 real_humidity = kma_res["humidity"]
                 real_feels = kma_res["feels_like"]
-                kma_api_active = True
+                api_active = True
     
     picked_date = datetime.now().date()
     picked_hour = f"{datetime.now().hour:02d}:00"
     picked_date_str = f"{picked_date.strftime('%Y-%m-%d')} {picked_hour}"
 
-# ── 📅 과거 기준 데이터 모드 (진짜 과거 기상청 데이터 연동) ──────────────
+# ── 📅 과거 데이터 모드 ───────────────────────────────────────────
 else:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📅 과거 폭염 데이터 날짜 선택 (근 3개년)")
+    st.sidebar.subheader("📅 과거 폭염 데이터 조회 (5월~9월)")
     
     today = datetime.now().date()
-    three_years_ago_start = date(today.year - 2, 1, 1)
+    three_years_ago = date(today.year - 2, 1, 1)
     
     raw_picked_date = st.sidebar.date_input(
-        "조회할 날짜를 선택하세요 (과거 3개년 내 5월~9월):",
-        value=date(2024, 8, 21), # 디폴트 날짜 세팅
-        min_value=three_years_ago_start,
+        "조회할 날짜:",
+        value=date(2024, 8, 15),
+        min_value=three_years_ago,
         max_value=today,
-        key="date_picker_raw_여름"
+        key="date_picker_여름"
     )
     
+    # 5월~9월만 허용
     if raw_picked_date.month < 5:
         picked_date = date(raw_picked_date.year, 5, 1)
-        st.sidebar.warning(f"⚠️ 5월~9월 제한으로 인해 **{picked_date.year}년 05월 01일**로 자동 조정되었습니다.")
+        st.sidebar.warning(f"⚠️ 5월~9월만 조회 가능합니다. {picked_date.year}년 05월 01일로 조정됨")
     elif raw_picked_date.month > 9:
         picked_date = date(raw_picked_date.year, 9, 30)
-        st.sidebar.warning(f"⚠️ 5월~9월 제한으로 인해 **{picked_date.year}년 09월 30일**로 자동 조정되었습니다.")
+        st.sidebar.warning(f"⚠️ 5월~9월만 조회 가능합니다. {picked_date.year}년 09월 30일로 조정됨")
     else:
         picked_date = raw_picked_date
-        
+    
     picked_hour = st.sidebar.selectbox(
-        "조회할 시간대를 선택하세요:",
+        "조회할 시간대:",
         [f"{i:02d}:00" for i in range(24)],
         index=14,
         key="hour_picker_여름"
@@ -84,90 +80,149 @@ else:
     
     picked_date_str = f"{picked_date.strftime('%Y-%m-%d')} {picked_hour}"
     
-    # 🔑 secrets.toml에 새로 추가한 기상청 전용 독립 키 가져오기
-    kma_past_key = st.secrets.get("KMA_SERVICE_KEY") if hasattr(st, "secrets") else os.getenv("KMA_SERVICE_KEY")
-    
-    # 💥 진짜 과거 기상청 데이터 호출 (분리된 전용 키 전달)
-    if kma_past_key:
-        with st.spinner(f"기상청에서 {picked_date_str} 실제 관측 데이터를 조회하는 중..."):
-            past_res = fetch_past_kma_temp(kma_past_key, picked_date, picked_hour)
+    kma_key = get_service_key()
+    if kma_key:
+        with st.spinner(f"📊 {picked_date_str} 기상청 관측 데이터 조회 중..."):
+            past_res = fetch_past_kma_temp(kma_key, picked_date, picked_hour)
             if past_res:
                 real_temp = past_res["temp"]
                 real_humidity = past_res["humidity"]
                 real_feels = past_res["feels_like"]
-                feels_trend = past_res["hourly_trend"] # 진짜 그날의 24시간 데이터
-                past_api_active = True
+                feels_trend = past_res["hourly_trend"]
+                api_active = True
 
-# ── 🌡️ 데이터 동적 매핑 (도시 열섬 편차 계산) ───────────────────────
-if (is_realtime and kma_api_active) or (not is_realtime and past_api_active):
-    base_feels = real_feels
-else:
-    # API 연동 실패 혹은 미연동 시에만 작동하는 백업용 시뮬레이션 로직
-    date_seed = int(picked_date.strftime("%Y%m%d")) + int(picked_hour.split(":")[0])
-    random.seed(date_seed)
-    month_offset = -3.0 if picked_date.month in [5, 9] else 0
-    temp_factor = random.uniform(-2.5, 3.5) + month_offset
-    base_feels = round(34.5 + temp_factor, 1)
+# ── 🌡️ 진주시 전체 행정동 열섬 데이터 생성 ───────────────────────
+base_feels = real_feels
 
-heat_rows = [
-    {"행정동": "대안동 (원도심)", "체감온도(℃)": round(base_feels + 1.2, 1), "열섬 편차(℃)": 2.4},
-    {"행정동": "계동 (원도심)", "체감온도(℃)": round(base_feels + 0.9, 1), "열섬 편차(℃)": 2.1},
-    {"행정동": "상봉동", "체감온도(℃)": round(base_feels + 0.3, 1), "열섬 편차(℃)": 1.8},
-    {"행정동": "상대동", "체감온도(℃)": round(base_feels - 0.2, 1), "열섬 편차(℃)": 1.3},
-    {"행정동": "정촌면 (외곽)", "체감온도(℃)": round(base_feels - 1.0, 1), "열섬 편차(℃)": 0.7},
-]
+# 도시 중심도에 따른 열섬 편차 정의
+zone_heat_offset = {
+    "원도심": 2.0,      # 가장 높은 열섬
+    "신도시": 1.5,
+    "동부": 0.8,
+    "서부": 0.9,
+    "북부": -0.5,      # 외곽 지역
+    "남부": -0.3,
+    "북서": -0.2,
+    "남서": -0.4,
+    "남동": -0.6
+}
+
+heat_rows = []
+for dong_name, location_info in station_locations.items():
+    zone = location_info.get("zone", "기타")
+    heat_offset = zone_heat_offset.get(zone, 0)
+    
+    # 도시열섬 편차 + 위치별 추가 보정
+    heat_value = round(heat_offset + np.random.uniform(-0.3, 0.3), 1)
+    feels_temp = round(base_feels + heat_value, 1)
+    
+    heat_rows.append({
+        "행정동": dong_name,
+        "위도": location_info["lat"],
+        "경도": location_info["lon"],
+        "체감온도(℃)": feels_temp,
+        "열섬편차(℃)": heat_value,
+        "지역": zone,
+        "주소": location_info["address"]
+    })
+
 heat_data = pd.DataFrame(heat_rows)
 
 # ── 상단 현황판 ──────────────────────────────────────────────────
 st.subheader("📊 진주시 행정동별 폭염 분석")
 
-if is_realtime and kma_api_active:
-    st.success(f"📡 **기상청 실시간 관측 데이터** 반영 중 (측정시각: {picked_hour})")
-    st.caption(f"현재 진주 기온: {real_temp}℃ / 습도: {real_humidity}% -> 체감온도: {real_feels}℃")
-elif not is_realtime and past_api_active:
-    st.success(f"📜 **기상청 실제 과거 관측 데이터** 반영 중 ({picked_date_str})")
-    st.caption(f"당시 실제 진주 기온: {real_temp}℃ / 습도: {real_humidity}% -> 실제 체감온도: {real_feels}℃")
+if api_active:
+    st.success(f"📡 **기상청 실시간 관측 데이터** (측정시각: {picked_hour})")
 else:
-    st.info(f"📂 **시뮬레이션 가상 데이터**를 기반으로 분석한 결과입니다. (기상청 API 키 확인 필요)")
+    st.warning(f"⚠️ 기상청 API 조회 불가 - 샘플 데이터 표시 중")
+
+st.caption(f"진주시 기온: {real_temp}℃ / 습도: {real_humidity}% → 체감온도: {real_feels}℃")
 
 max_temp_row = heat_data.loc[heat_data["체감온도(℃)"].idxmax()]
+min_temp_row = heat_data.loc[heat_data["체감온도(℃)"].idxmin()]
 avg_feels_like = heat_data["체감온도(℃)"].mean()
+avg_uhi = heat_data["열섬편차(℃)"].mean()
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("🚨 최고 폭염 지역", f"{max_temp_row['행정동']}", f"{max_temp_row['체감온도(℃)']} ℃")
-col2.metric("📉 진주시 평균 체감온도", f"{avg_feels_like:.1f} ℃", f"열섬 평균 편차 +{heat_data['열섬 편차(℃)'].mean():.1f}℃")
-col3.metric("🔥 열섬 중심 구역", "대안동·계동", "+2.4 ℃ (주변 대비)")
+col2.metric("❄️ 최저 기온 지역", f"{min_temp_row['행정동']}", f"{min_temp_row['체감온도(℃)']} ℃")
+col3.metric("📉 진주시 평균", f"{avg_feels_like:.1f} ℃", f"")
+col4.metric("🌡️ 온도차", f"{max_temp_row['체감온도(℃)'] - min_temp_row['체감온도(℃)']:.1f} ℃", "최고-최저")
 
 # ── 시각화 차트 ──────────────────────────────────────────────────
+st.subheader("📊 행정동별 열섬 시각화")
+
 col_chart1, col_chart2 = st.columns(2)
+
 with col_chart1:
-    fig_t = px.bar(heat_data, x="행정동", y="체감온도(℃)", color="체감온도(℃)",
-                   color_continuous_scale="Reds", title="🔥 행정동별 체감온도 비교", text="체감온도(℃)")
-    fig_t.update_traces(textposition="outside")
+    # 체감온도 순정렬 (높은순)
+    heat_sorted = heat_data.sort_values("체감온도(℃)", ascending=False)
+    fig_t = px.bar(heat_sorted, x="체감온도(℃)", y="행정동", orientation="h", 
+                   color="체감온도(℃)", color_continuous_scale="Reds",
+                   title="🔥 행정동별 체감온도 (내림차순)")
+    fig_t.update_layout(yaxis={'categoryorder': 'total ascending'}, height=600)
     st.plotly_chart(fig_t, use_container_width=True)
+
 with col_chart2:
-    fig_u = px.bar(heat_data, x="행정동", y="열섬 편차(℃)", color="열섬 편차(℃)",
-                   color_continuous_scale="Oranges", title="🏙️ 인근 교외 대비 도시 열섬(UHI) 편차", text="열섬 편차(℃)")
-    fig_u.update_traces(textposition="outside")
+    # 지역별 열섬 편차
+    fig_u = px.box(heat_data, x="지역", y="열섬편차(℃)", color="지역",
+                   title="🏙️ 지역별 도시열섬(UHI) 편차 분포")
     st.plotly_chart(fig_u, use_container_width=True)
 
-# ── 24시간 추이 (진짜 데이터 트렌드) ──────────────────────────────────
+# ── 📍 진주시 폭염 지수 지도 시각화 ────────────────────────────────
+st.subheader("📍 진주시 행정동별 폭염 지수 지도")
+
+fig_map = px.scatter_mapbox(
+    heat_data,
+    lat='위도',
+    lon='경도',
+    size=heat_data['열섬편차(℃)'].abs() + 1,  # 절댓값 사용 + 최소 크기(1) 보정
+    color='체감온도(℃)',
+    hover_name='행정동',
+    hover_data={'체감온도(℃)':True, '열섬편차(℃)':True, '지역':True, '주소':False},
+    size_max=25,
+    zoom=10.8,
+    mapbox_style='open-street-map',
+    title='🗺️ 진주시 실시간 폭염 지수 분포도',
+    color_continuous_scale='RdYlBu_r'
+)
+fig_map.update_layout(height=600, margin=dict(l=0, r=0, t=50, b=0))
+
+st.plotly_chart(fig_map, use_container_width=True)
+
+# ── 📊 상세 데이터 테이블 ──────────────────────────────────────────
+st.subheader("📋 전체 행정동 상세 데이터")
+
+display_columns = ['행정동', '체감온도(℃)', '열섬편차(℃)', '지역', '주소']
+display_data = heat_data[display_columns].copy()
+display_data = display_data.sort_values('체감온도(℃)', ascending=False).reset_index(drop=True)
+display_data.index = display_data.index + 1
+
+st.dataframe(display_data, use_container_width=True)
+
+# ── 24시간 추이 (실제 데이터 트렌드) ──────────────────────────────────
 st.subheader("⏰ 24시간 체감온도 및 열지수 변동 추이")
 
 time_hours = [f"{i:02d}:00" for i in range(24)]
 
-if not feels_trend: # API가 안 돌았을 때의 백업 추이 로직
-    base_cycle = [30,29,28,28,29,30,32,35,37,39,40,41,41,40,40,39,38,37,36,35,34,33,32,31]
-    offset = base_feels - 38.0 
+if feels_trend and len(feels_trend) == 24:
+    # 실제 API 데이터 사용
+    heat_trend = [round(v * 0.92, 1) for v in feels_trend]
+    df_h = pd.DataFrame({"시간": time_hours, "체감온도(℃)": feels_trend, "열지수(℃)": heat_trend})
+    chart_title = "⏰ 하루 시간대별 실제 관측 온도 변화 추이" if api_active else "⏰ 샘플 기반 온도 변화 추이"
+else:
+    # API 데이터 없을 때: 현재 기온 기반 표준 곡선 생성
+    base_cycle = [28, 27, 26, 26, 27, 28, 30, 33, 35, 37, 38, 39, 39, 38, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29]
+    offset = real_feels - 37.0
     feels_trend = [round(v + offset, 1) for v in base_cycle]
+    heat_trend = [round(v * 0.92, 1) for v in feels_trend]
+    df_h = pd.DataFrame({"시간": time_hours, "체감온도(℃)": feels_trend, "열지수(℃)": heat_trend})
+    chart_title = "⏰ 표준 여름철 온도 변화 추이 (샘플)"
 
-heat_trend = [round(v * 0.92, 1) for v in feels_trend]
-
-df_h = pd.DataFrame({"시간": time_hours, "체감온도(℃)": feels_trend, "열지수(℃)": heat_trend})
 df_h_melt = df_h.melt(id_vars=["시간"], var_name="항목", value_name="값")
 
 fig_ht = px.line(df_h_melt, x="시간", y="값", color="항목", markers=True,
-    title="⏰ 하루 시간대별 실제 관측 온도 변화 추이" if (kma_api_active or past_api_active) else "⏰ 시뮬레이션 온도 변화 추이",
+    title=chart_title,
     color_discrete_map={"열지수(℃)": "#ff7f0e", "체감온도(℃)": "#d62728"})
 fig_ht.update_layout(xaxis_title="시간", yaxis_title="온도 (℃)", height=450,
     xaxis=dict(tickmode="array", tickvals=time_hours[::3], ticktext=time_hours[::3]))

@@ -9,12 +9,14 @@ import plotly.express as px
 from datetime import datetime, date, timedelta
 import random
 from common import (
-    jinju_station_aliases, jinju_station_search_keywords,
+    jinju_station_search_keywords,
     station_locations, pm10_status, parse_grade, GRADE_MAP,
     fetch_airkorea_pm10, fetch_airkorea_station_list,
     fetch_airkorea_station_realtime, get_service_key,
     get_season_by_date, HISTORICAL, fetch_airkorea_past_pm10
 )
+
+SPRING_STATIONS = ["상봉동", "대안동", "상대동", "정촌면"]
 
 SEASON_KEY = "봄"
 st.set_page_config(page_title="봄 - 미세먼지·황사", page_icon="🌸", layout="wide")
@@ -47,7 +49,7 @@ if is_realtime:
                 s for s in station_list
                 if s.get("cityName") == "진주시"
                 or any(alias in s.get("stationName", "") or alias in s.get("addr", "")
-                       for alias in jinju_station_aliases)
+                       for alias in SPRING_STATIONS)
             ]
         except Exception as e:
             station_list_error = str(e)
@@ -108,8 +110,8 @@ def find_api_item(alias, items):
 station_rows = []
 
 if is_realtime and service_key:
-    st.info("✅ AIRKOREA 실시간 API에서 4개 진주 측정소 데이터를 조회합니다.")
-    for alias in jinju_station_aliases:
+    st.info("✅ AIRKOREA 실시간 API에서 대표 4개 진주 측정소 데이터를 조회합니다.")
+    for alias in SPRING_STATIONS:
         station_name = resolve_station_name(alias)
         station_label, data_time = alias, "-"
         pm_value, grade = None, "데이터 없음"
